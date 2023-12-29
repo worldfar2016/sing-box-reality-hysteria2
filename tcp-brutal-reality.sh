@@ -1,44 +1,97 @@
 #!/bin/bash
 
-# 延迟打字
+# delay print
 print_with_delay() {
     text="$1"
     delay="$2"
     for ((i = 0; i < ${#text}; i++)); do
-        echo -n "${text:$i:1}"
-        sleep $delay
+        printf "%s" "${text:$i:1}"
+        sleep "$delay"
     done
     echo
 }
+# colorful text
+warning() { echo -e "\033[31m\033[01m$*\033[0m"; }  # 红色
+error() { echo -e "\033[31m\033[01m$*\033[0m" && exit 1; } # 红色
+info() { echo -e "\033[32m\033[01m$*\033[0m"; }   # 绿色
+hint() { echo -e "\033[33m\033[01m$*\033[0m"; }   # 黄色
+#show system and singbox info
+show_status(){
+    # 获取sing-box服务的PID
+    singbox_pid=$(pgrep sing-box)
 
-# 自定义字体彩色，read 函数
-red() { echo -e "\033[31m\033[01m$*\033[0m"; }  # 红色
-green() { echo -e "\033[32m\033[01m$*\033[0m"; }   # 绿色
-yellow() { echo -e "\033[33m\033[01m$*\033[0m"; }   # 黄色
+    # 获取Sing-box服务状态
+    singbox_status=$(systemctl is-active sing-box)
 
-#信息提示
+    if [ "$singbox_status" == "active" ]; then
+        # 获取CPU和内存占用信息
+        cpu_usage=$(ps -p $singbox_pid -o %cpu | tail -n 1)
+        memory_usage=$(ps -p $singbox_pid -o rss | tail -n 1)
+        memory_usage_mb=$((memory_usage / 1024))  # 转换为MB
+        latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | grep -Po '"tag_name": "\K.*?(?=")' | sort -V | tail -n 1)
+        latest_version=${latest_version_tag#v}  # Remove 'v' prefix from version number
+        echo ""
+        iswarp=$(grep '^WARP_ENABLE=' /root/sbox/config | cut -d'=' -f2)
+        # 显示UI信息
+        warning "Sing-box服务状态信息:"
+        hint "========================="
+        info "状态: 运行中"
+        info "CPU 占用: $cpu_usage%"
+        info "内存 占用: ${memory_usage_mb}MB"
+        info "singbox最新版本: $latest_version"
+        info "singbox当前版本: $(/root/sbox/sing-box version 2>/dev/null | awk '/version/{print $NF}')"
+        info "warp分流开启(输入6管理): $iswarp"
+        hint "========================="
+        # 可以添加其他资源信息获取，例如磁盘占用等
+
+        # 显示UI完成后的其他处理
+        # 例如：可以在这里添加展示其他资源信息的逻辑
+    else
+        warning "Sing-box 未运行"
+    fi
+
+}
+#show notice
 show_notice() {
     local message="$1"
-
-    local green_bg="\e[48;5;34m"
-    local white_fg="\e[97m"
     local reset="\e[0m"
-
-    echo -e "${green_bg}${white_fg}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${reset}"
-    echo -e "${white_fg}┃${reset}                                                                                             "
-    echo -e "${white_fg}┃${reset}                                   ${message}                                                "
-    echo -e "${white_fg}┃${reset}                                                                                             "
-    echo -e "${green_bg}${white_fg}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${reset}"
+    local bold="\e[1m"
+    local terminal_width=$(tput cols)
+    local line=""
+    local padding=$(( (terminal_width - ${#message}) / 2 ))
+    local padded_message="$(printf "%*s%s" $padding '' "$message")"
+    for ((i=1; i<=terminal_width; i++)); do
+        line+="*"
+    done
+    warning "${bold}${line}${reset}"
+    echo ""
+    warning "${bold}${padded_message}${reset}"
+    echo ""
+    warning "${bold}${line}${reset}"
 }
-
-# 作者介绍
-print_with_delay "Reality Grpc by 绵阿羊" 0.03
-echo ""
-echo ""
-
-
-# 创建快捷方式
-create_shortcut() {
+#install pkgs
+install_pkgs() {
+  # Install qrencode, jq, and iptables if not already installed
+  local pkgs=("qrencode" "jq" "iptables")
+  for pkg in "${pkgs[@]}"; do
+    if command -v "$pkg" &> /dev/null; then
+      echo "$pkg is already installed."
+    else
+      echo "Installing $pkg..."
+      if command -v apt &> /dev/null; then
+        sudo apt update > /dev/null 2>&1 && sudo apt install -y "$pkg" > /dev/null 2>&1
+      elif command -v yum &> /dev/null; then
+        sudo yum install -y "$pkg"
+      elif command -v dnf &> /dev/null; then
+        sudo dnf install -y "$pkg"
+      else
+        error "Unable to install $pkg. Please install it manually and rerun the script."
+      fi
+      echo "$pkg has been installed."
+    fi
+  done
+}
+install_shortcut() {
   cat > /root/sbox/mianyang.sh << EOF
 #!/usr/bin/env bash
 bash <(curl -fsSL https://github.com/vveg26/sing-box-reality-hysteria2/raw/main/tcp-brutal-reality.sh) \$1
@@ -47,8 +100,17 @@ EOF
   ln -sf /root/sbox/mianyang.sh /usr/bin/mianyang
 
 }
-# 下载cloudflared和sb
-download_singbox(){
+reload_singbox(){
+    if /root/sbox/sing-box check -c /root/sbox/sbconfig_server.json; then
+      echo "检查配置文件成功，重启服务..."
+      systemctl reload sing-box
+    else
+      error "配置文件检查错误"
+    fi
+}
+# install beta singbox
+#TODO install other singbox
+install_singbox(){
   arch=$(uname -m)
   echo "Architecture: $arch"
   # Map architecture names
@@ -63,9 +125,7 @@ download_singbox(){
           arch="armv7"
           ;;
   esac
-  # Fetch the latest (including pre-releases) release version number from GitHub API
-  # 正式版
-  #latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | grep -Po '"tag_name": "\K.*?(?=")' | head -n 1)
+
   #beta版本
   latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | grep -Po '"tag_name": "\K.*?(?=")' | sort -V | tail -n 1)
   latest_version=${latest_version_tag#v}  # Remove 'v' prefix from version number
@@ -77,36 +137,52 @@ download_singbox(){
   url="https://github.com/SagerNet/sing-box/releases/download/${latest_version_tag}/${package_name}.tar.gz"
   # Download the latest release package (.tar.gz) from GitHub
   curl -sLo "/root/${package_name}.tar.gz" "$url"
-
   # Extract the package and move the binary to /root
   tar -xzf "/root/${package_name}.tar.gz" -C /root
   mv "/root/${package_name}/sing-box" /root/sbox
-
   # Cleanup the package
   rm -r "/root/${package_name}.tar.gz" "/root/${package_name}"
-
   # Set the permissions
   chown root:root /root/sbox/sing-box
   chmod +x /root/sbox/sing-box
 }
 
+generate_port() {
+    while :; do
+        port=$((RANDOM % 10001 + 10000))
+        read -p "请输入协议监听端口(默认随机生成): " user_input
+        port=${user_input:-$port}
+        ss -tuln | grep -q ":$port\b" || { echo "$port"; return $port; }
+        echo "端口 $port 被占用，请输入其他端口"
+    done
+}
+
+modify_port() {
+    local current_port="$1"
+    while :; do
+        read -p "请输入需要修改的端口，默认随机生成 (当前端口为: $current_port): " modified_port
+        modified_port=${modified_port:-$current_port}
+        if [ "$modified_port" -eq "$current_port" ]; then
+            break
+        fi
+        if ss -tuln | grep -q ":$modified_port\b"; then
+            echo "端口 $port 被占用，请输入其他端口"
+        else
+            break
+        fi
+    done
+    echo "$modified_port"
+}
 # client configuration
 show_client_configuration() {
-
-  # 获取当前ip
+  # get ip
   server_ip=$(grep -o "SERVER_IP='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
-  
-  # reality
-  # reality当前端口
-  reality_port=$(grep -o "REALITY_PORT='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
-  # 当前偷取的网站
-  reality_server_name=$(grep -o "REALITY_SERVER_NAME='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
-  # 当前reality uuid
-  reality_uuid=$(grep -o "REALITY_UUID='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
-  # 获取公钥
   public_key=$(grep -o "PUBLIC_KEY='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
-  # 获取short_id
-  short_id=$(grep -o "SHORT_ID='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
+  # reality
+  reality_port=$(jq -r '.inbounds[] | select(.tag == "vless-brutal-in") | .listen_port' /root/sbox/sbconfig_server.json)
+  reality_uuid=$(jq -r '.inbounds[] | select(.tag == "vless-brutal-in") | .users[0].uuid' /root/sbox/sbconfig_server.json)
+  reality_server_name=$(jq -r '.inbounds[] | select(.tag == "vless-brutal-in") | .tls.server_name' /root/sbox/sbconfig_server.json)
+  short_id=$(jq -r '.inbounds[] | select(.tag == "vless-brutal-in") | .tls.reality.short_id[0]' /root/sbox/sbconfig_server.json)
 
   brutal_up=$(grep -o "BRUTAL_UP='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
 
@@ -702,6 +778,7 @@ rules:
     - GEOIP,CN,DIRECT
     - MATCH,节点选择
 EOF
+
 }
 
 #enable bbr
@@ -710,28 +787,27 @@ enable_bbr() {
     bash <(curl -L -s https://raw.githubusercontent.com/teddysun/across/master/bbr.sh)
     echo ""
 }
-#修改sb
+
 modify_singbox() {
     #modifying reality configuration
-    show_notice "开始修改reality端口号和域名"
-    reality_current_port=$(grep -o "REALITY_PORT='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
-    while true; do
-        read -p "请输入想要修改的端口号 (当前端口号为 $reality_current_port): " reality_port
-        reality_port=${reality_port:-$reality_current_port}
-        if [ "$reality_port" -eq "$reality_current_port" ]; then
+    echo ""
+    warning "开始修改reality端口号和域名"
+    info "brutal port"
+    reality_brutal_current_port=$(jq -r '.inbounds[] | select(.tag == "vless-brutal-in") | .listen_port' /root/sbox/sbconfig_server.json)
+    reality_brutal_port=$(modify_port "$reality_brutal_current_port")
+    reality_current_server_name=$(jq -r '.inbounds[] | select(.tag == "vless-in") | .tls.server_name' /root/sbox/sbconfig_server.json)
+    reality_server_name="$reality_current_server_name"
+    while :; do
+        read -p "请输入需要偷取证书的网站，必须支持 TLS 1.3 and HTTP/2 (默认: $reality_server_name): " input_server_name
+        reality_server_name=${input_server_name:-$reality_server_name}
+
+        if curl --tlsv1.3 --http2 -sI "https://$reality_server_name" | grep -q "HTTP/2"; then
             break
-        fi
-        if ss -tuln | grep -q ":$reality_port\b"; then
-            echo "端口 $reality_port 已经被占用，请选择其他端口。"
         else
-            break
+            echo "域名 $reality_server_name 不支持 TLS 1.3 或 HTTP/2，请重新输入."
         fi
     done
-    reality_current_server_name=$(grep -o "REALITY_SERVER_NAME='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
-    read -p "请输入想要偷取的域名 (当前域名为 $reality_current_server_name): " reality_server_name
-    reality_server_name=${reality_server_name:-$reality_current_server_name}
-    echo ""
-
+    echo "域名 $reality_server_name 符合."
     current_up=$(grep -o "BRUTAL_UP='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
     read -p "请输入上行带宽up，对应客户端下行带宽 (当前为 $current_up): " brutal_up
     brutal_up=${brutal_up:-$current_up}
@@ -740,41 +816,42 @@ modify_singbox() {
     brutal_down=${brutal_down:-$current_down}
     echo ""
 
-
     # 修改sing-box
-    sed -i -e "/\"listen_port\":/s/[0-9]\+/$reality_port/" \
-            -e "s/\"server_name\": *\"[^\"]*\"/\"server_name\": \"$reality_server_name\"/" \
-            -e "s/\"server\": *\"[^\"]*\"/\"server\": \"$reality_server_name\"/" /root/sbox/sbconfig_server.json
+    jq --arg reality_brutal_port "$reality_brutal_port" \
+    --arg hy_port "$hy_port" \
+    --arg reality_server_name "$reality_server_name" \
+    --arg brutal_up "$brutal_up" \
+    --arg brutal_down "$brutal_down" \
+    '
+    (.inbounds[] | select(.tag == "vless-brutal-in") | .listen_port) |= ($reality_brutal_port | tonumber) |
+    (.inbounds[] | select(.tag == "vless-brutal-in") | .tls.server_name) |= $reality_server_name |
+    (.inbounds[] | select(.tag == "vless-brutal-in") | .tls.reality.handshake.server) |= $reality_server_name |
+    (.inbounds[] | select(.tag == "vless-brutal-in") | .multiplex.brutal.up_mbps) |= ($brutal_up | tonumber) |
+    (.inbounds[] | select(.tag == "vless-brutal-in") | .multiplex.brutal.down_mbps) |= ($brutal_down | tonumber)
+    ' /root/sbox/sbconfig_server.json > /root/sbox/temp.json && mv /root/sbox/temp.json /root/sbox/sbconfig_server.json
 
-
-    sed -i -e "/\"up_mbps\":/s/[0-9]\+/$brutal_up/" \
-          -e "/\"down_mbps\":/s/[0-9]\+/$brutal_down/" /root/sbox/sbconfig_server.json
-
-
-    #修改config
-    sed -i "s/REALITY_PORT='[^']*'/REALITY_PORT='$reality_port'/" /root/sbox/config
-    sed -i "s/REALITY_SERVER_NAME='[^']*'/REALITY_SERVER_NAME='$reality_server_name'/" /root/sbox/config
-    sed -i "s/BRUTAL_UP='[^']*'/BRUTAL_UP='$brutal_up'/" /root/sbox/config
-    sed -i "s/BRUTAL_DOWN='[^']*'/BRUTAL_DOWN='$brutal_down'/" /root/sbox/config
-    # Restart sing-box service
-    systemctl restart sing-box
+    echo ""
+    reload_singbox
+    echo ""
 }
-
+install_brutal(){
+  bash <(curl -fsSL https://tcp.hy2.sh/)
+}
 uninstall_singbox() {
+
+    warning "开始卸载..."
     # Stop and disable services
-    systemctl stop sing-box argo
-    systemctl disable sing-box argo > /dev/null 2>&1
+    systemctl stop sing-box 
+    systemctl disable sing-box  > /dev/null 2>&1
 
     # Remove service files
     rm -f /etc/systemd/system/sing-box.service
-    rm -f /etc/systemd/system/argo.service
 
     # Remove configuration and executable files
     rm -f /root/sbox/sbconfig_server.json
     rm -f /root/sbox/sing-box
-    rm -f /usr/bin/mianyang
     rm -f /root/sbox/mianyang.sh
-    rm -f /root/sbox/cloudflared-linux
+    rm -f /usr/bin/mianyang
     rm -f /root/sbox/self-cert/private.key
     rm -f /root/sbox/self-cert/cert.pem
     rm -f /root/sbox/config
@@ -785,70 +862,539 @@ uninstall_singbox() {
 
     echo "卸载完成"
 }
+process_warp(){
+    while :; do
+        iswarp=$(grep '^WARP_ENABLE=' /root/sbox/config | cut -d'=' -f2)
+        if [ "$iswarp" = "FALSE" ]; then
+          warning "warp分流未开启，是否开启（默认解锁openai和奈飞）"
+          read -p "是否开启? (y/n 默认为y): " confirm
+          confirm=${confirm:-"y"}
+          if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            enable_warp
+          else
+            break
+          fi
+        else
+            warp_option=$(awk -F= '/^WARP_OPTION/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' /root/sbox/config)
+            case $warp_option in
+                0)
+                    current_option="手动分流(使用geosite和domain分流)"
+                    ;;
+                1)
+                    current_option="全局分流(接管所有流量)"
+                    ;;
+                *)
+                    current_option="unknow!"
+                    ;;
+            esac
+            warp_mode=$(awk -F= '/^WARP_MODE/{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' /root/sbox/config)
+            case $warp_mode in
+                0)
+                    current_mode="Ipv6优先"
+                    current_mode1="warp-IPv6-prefer-out"
+                    ;;
+                1)
+                    current_mode="Ipv4优先"
+                    current_mode1="warp-IPv4-prefer-out"
+                    ;;
+                2)
+                    current_mode="Ipv6仅允许"
+                    current_mode1="warp-IPv6-out"
+                    ;;
+                3)
+                    current_mode="Ipv4仅允许"
+                    current_mode1="warp-IPv4-out"
+                    ;;
+                *)
+                    current_option="unknow!"
+                    ;;
+            esac
+            echo ""
+            warning "warp分流已经开启"
+            echo ""
+            hint "当前模式为: $current_mode"
+            hint "当前状态为: $current_option"
+            echo ""
+            info "请选择选项："
+            echo ""
+            info "1. 切换为手动分流(geosite和domain分流)"
+            info "2. 切换为全局分流(接管所有流量)" 
+            info "3. 设置手动分流规则(geosite和domain分流)"  
+            info "4. 切换为warp策略"
+            info "5. 删除warp解锁"
+            info "0. 退出"
+            echo ""
+            read -p "请输入对应数字（0-5）: " warp_input
+        case $warp_input in
+          1)
+            jq '.route.final = "direct"' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+            sed -i "s/WARP_OPTION=.*/WARP_OPTION=0/" /root/sbox/config
+            reload_singbox
+          ;;
+          2)
+            jq --arg current_mode1 "$current_mode1" '.route.final = $current_mode1' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+            sed -i "s/WARP_OPTION=.*/WARP_OPTION=1/" /root/sbox/config
+            reload_singbox
+            ;;
+          4)
+          while :; do
+              warning "请选择需要切换的warp策略"
+              echo ""
+              hint "当前状态为: $current_option"
+              echo ""
+              info "请选择切换的选项："
+              echo ""
+              info "1. Ipv6优先(默认)"
+              info "2. Ipv4优先"
+              info "3. 仅允许Ipv6"
+              info "4. 仅允许Ipv4"
+              info "0. 退出"
+              echo ""
 
-# install_base
-install_brutal(){
-  bash <(curl -fsSL https://tcp.hy2.sh/)
+              read -p "请输入对应数字（0-4）: " user_input
+              user_input=${user_input:-1}
+              case $user_input in
+                  1)
+                      warp_out="warp-IPv6-prefer-out"
+                      sed -i "s/WARP_MODE=.*/WARP_MODE=0/" /root/sbox/config
+                      break
+                      ;;
+                  2)
+                      warp_out="warp-IPv4-prefer-out"
+                      sed -i "s/WARP_MODE=.*/WARP_MODE=1/" /root/sbox/config
+                      break
+                      ;;
+                  3)
+                      warp_out="warp-IPv6-out"
+                      sed -i "s/WARP_MODE=.*/WARP_MODE=2/" /root/sbox/config
+                      break
+                      ;;
+                  4)
+                      warp_out="warp-IPv4-out"
+                      sed -i "s/WARP_MODE=.*/WARP_MODE=3/" /root/sbox/config
+                      break
+                      ;;
+                  0)
+                      # Exit the loop if option 0 is selected
+                      echo "退出warp"
+                      exit 0
+                      ;;
+                  *)
+                      # Handle invalid input
+                      echo "无效的输入，请重新输入"
+                      ;;
+              esac
+          done
+            jq --arg warp_out "$warp_out" '.route.rules[].outbound |= $warp_out' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+            if [ "$warp_option" -ne 0 ]; then
+              jq --arg warp_out "$warp_out" '.route.final = $warp_out' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+            fi
+            reload_singbox
+            ;;
+          3)
+            info "请选择："
+            echo ""
+            info "1. 手动添加geosite分流（适配singbox1.8.0)"
+            info "2. 手动添加域名关键字匹配分流"
+            info "0. 退出"
+            echo ""
+
+            read -p "请输入对应数字（0-2）: " user_input
+            case $user_input in
+                1)
+                    while :; do
+                      echo ""
+                      warning "geosite分流为: "
+                      #域名关键字为
+                      jq '.route.rules[] | select(.rule_set) | .rule_set' /root/sbox/sbconfig_server.json
+                      info "请选择操作："
+                      echo "1. 添加geosite"
+                      echo "2. 删除geosite"
+                      echo "0. 退出"
+                      echo ""
+
+                      read -p "请输入对应数字（0-2）: " user_input
+
+                      case $user_input in
+                          1)
+                            #add domain
+                            read -p "请输入要添加的域名关键字（若要添加geosite-openai，输入openai）: " new_keyword
+                            url="https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/$new_keyword.srs"
+                            formatted_keyword="geosite-$new_keyword"
+                            # 检查是否存在相同的 geosite 关键字
+                            if jq --arg formatted_keyword "$formatted_keyword" '.route.rules[0].rule_set | any(. == $formatted_keyword)' /root/sbox/sbconfig_server.json | grep -q "true"; then
+                              echo "geosite已存在，不添加重复项: $formatted_keyword"
+                            else
+                              http_status=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+
+                              if [ "$http_status" -eq 200 ]; then
+                                # 如果不存在，则添加
+                                  new_rule='{
+                                    "tag": "'"$formatted_keyword"'",
+                                    "type": "remote",
+                                    "format": "binary",
+                                    "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/'"$new_keyword"'.srs",
+                                    "download_detour": "direct"
+                                  }'
+
+                                jq --arg formatted_keyword "$formatted_keyword" '.route.rules[0].rule_set += [$formatted_keyword]' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+                                jq --argjson new_rule "$new_rule" '.route.rule_set += [$new_rule]' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+
+                                echo "geosite已添加: $new_rule"
+                              else
+                                echo "geosite srs文件不存在，请重新输入..."
+                              fi
+                            fi
+                            ;;
+                          2)
+                            #delete domain keywords
+                            read -p "请输入要删除的域名关键字（若要删除geosite-openai，输入openai） " keyword_to_delete
+                            formatted_keyword="geosite-$keyword_to_delete"
+                            if jq --arg formatted_keyword "$formatted_keyword" '.route.rules[0].rule_set | any(. == $formatted_keyword)' /root/sbox/sbconfig_server.json | grep -q "true"; then
+                              jq --arg formatted_keyword "$formatted_keyword" '.route.rules[0].rule_set -= [$formatted_keyword]' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+                              #卸载ruleset
+                              jq --arg formatted_keyword "$formatted_keyword" 'del(.route.rule_set[] | select(.tag == $formatted_keyword))' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+                              echo "域名关键字已删除: $formatted_keyword"
+                            else
+                              echo "域名关键字不存在，不执行删除操作: $formatted_keyword"
+                            fi
+                              ;;
+                          0)
+                              echo "退出"
+                              break
+                              ;;
+                          *)
+                              echo "无效的输入，请重新输入"
+                              ;;
+                      esac
+                  done
+                    break
+                    ;;
+                2)
+                    while :; do
+                      echo ""
+                      warning "域名关键字为: "
+                      #域名关键字为
+                      jq '.route.rules[] | select(.domain_keyword) | .domain_keyword' /root/sbox/sbconfig_server.json
+                      info "请选择操作："
+                      echo "1. 添加域名关键字"
+                      echo "2. 删除域名关键字"
+                      echo "0. 退出"
+                      echo ""
+
+                      read -p "请输入对应数字（0-2）: " user_input
+
+                      case $user_input in
+                          1)
+                            #add domain keywords
+                            read -p "请输入要添加的域名关键字: " new_keyword
+                            if jq --arg new_keyword "$new_keyword" '.route.rules[1].domain_keyword | any(. == $new_keyword)' /root/sbox/sbconfig_server.json | grep -q "true"; then
+                              echo "域名关键字已存在，不添加重复项: $new_keyword"
+                            else
+                              jq --arg new_keyword "$new_keyword" '.route.rules[1].domain_keyword += [$new_keyword]' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+                              echo "域名关键字已添加: $new_keyword"
+                            fi
+                            ;;
+                          2)
+                            #delete domain keywords
+                            read -p "请输入要删除的域名关键字: " keyword_to_delete
+                            if jq --arg keyword_to_delete "$keyword_to_delete" '.route.rules[1].domain_keyword | any(. == $keyword_to_delete)' /root/sbox/sbconfig_server.json | grep -q "true"; then
+                              jq --arg keyword_to_delete "$keyword_to_delete" '.route.rules[1].domain_keyword -= [$keyword_to_delete]' /root/sbox/sbconfig_server.json > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp /root/sbox/sbconfig_server.json
+                              echo "域名关键字已删除: $keyword_to_delete"
+                            else
+                              echo "域名关键字不存在，不执行删除操作: $keyword_to_delete"
+                            fi
+                              ;;
+                          0)
+                              echo "退出"
+                              break
+                              ;;
+                          *)
+                              echo "无效的输入，请重新输入"
+                              ;;
+                      esac
+                  done
+
+                    break
+                    ;;
+
+                0)
+                    # Exit the loop if option 0 is selected
+                    echo "退出"
+                    exit 0
+                    ;;
+                *)
+                    # Handle invalid input
+                    echo "无效的输入"
+                    ;;
+            esac
+            reload_singbox
+            break
+            ;;
+          5)
+              disable_warp
+              break
+            ;;
+          *)
+              echo "退出"
+              break
+              ;;
+        esac
+
+
+        fi
+        echo "配置文件更新成功"
+    done
+}
+enable_warp(){
+    warning "开始注册warp..."
+    output=$(bash -c "$(curl -L warp-reg.vercel.app)")
+    v6=$(echo "$output" | grep -oP '"v6": "\K[^"]+' | awk 'NR==2')
+    private_key=$(echo "$output" | grep -oP '"private_key": "\K[^"]+')
+    reserved=$(echo "$output" | grep -oP '"reserved_str": "\K[^"]+')
+while :; do
+    warning "请选择需要设置的warp策略（默认v6优先）"
+    echo ""
+    info "请选择选项："
+    echo ""
+    info "1. Ipv6优先(默认)"
+    info "2. Ipv4优先"
+    info "3. 仅允许Ipv6"
+    info "4. 仅允许Ipv4"
+    info "0. 退出"
+    echo ""
+
+    read -p "请输入对应数字（0-4）: " user_input
+    user_input=${user_input:-1}
+    case $user_input in
+        1)
+            warp_out="warp-IPv6-prefer-out"
+            sed -i "s/WARP_MODE=.*/WARP_MODE=0/" /root/sbox/config
+            break
+            ;;
+        2)
+            warp_out="warp-IPv4-prefer-out"
+            sed -i "s/WARP_MODE=.*/WARP_MODE=1/" /root/sbox/config
+            break
+            ;;
+        3)
+            warp_out="warp-IPv6-out"
+            sed -i "s/WARP_MODE=.*/WARP_MODE=2/" /root/sbox/config
+            break
+            ;;
+        4)
+            warp_out="warp-IPv4-out"
+            sed -i "s/WARP_MODE=.*/WARP_MODE=3/" /root/sbox/config
+            break
+            ;;
+        0)
+            # Exit the loop if option 0 is selected
+            echo "退出warp"
+            exit 0
+            ;;
+        *)
+            # Handle invalid input
+            echo "无效的输入，请重新输入"
+            ;;
+    esac
+done
+    # Command to modify the JSON configuration in-place
+    jq --arg private_key "$private_key" --arg v6 "$v6" --arg reserved "$reserved" --arg warp_out "$warp_out" '
+        .route = {
+          "final": "direct",
+          "rules": [
+            {
+              "rule_set": ["geosite-openai","geosite-netflix"],
+              "outbound": $warp_out
+            },
+            {
+              "domain_keyword": [
+                "ipaddress"
+              ],
+              "outbound": $warp_out
+            }
+          ],
+          "rule_set": [
+            { 
+              "tag": "geosite-openai",
+              "type": "remote",
+              "format": "binary",
+              "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/openai.srs",
+              "download_detour": "direct"
+            },
+            {
+              "tag": "geosite-netflix",
+              "type": "remote",
+              "format": "binary",
+              "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/netflix.srs",
+              "download_detour": "direct"
+            }
+          ]
+        } | .outbounds += [
+          {
+            "type": "direct",
+            "tag": "warp-IPv4-out",
+            "detour": "wireguard-out",
+            "domain_strategy": "ipv4_only"
+          },
+          {
+            "type": "direct",
+            "tag": "warp-IPv6-out",
+            "detour": "wireguard-out",
+            "domain_strategy": "ipv6_only"
+          },
+          {
+            "type": "direct",
+            "tag": "warp-IPv6-prefer-out",
+            "detour": "wireguard-out",
+            "domain_strategy": "prefer_ipv6"
+          },
+          {
+            "type": "direct",
+            "tag": "warp-IPv4-prefer-out",
+            "detour": "wireguard-out",
+            "domain_strategy": "prefer_ipv4"
+          },
+          {
+            "type": "wireguard",
+            "tag": "wireguard-out",
+            "server": "162.159.192.1",
+            "server_port": 2408,
+            "local_address": [
+              "172.16.0.2/32",
+              $v6 + "/128"
+            ],
+            "private_key": $private_key,
+            "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+            "reserved": $reserved,
+            "mtu": 1280
+          }
+        ]' "/root/sbox/sbconfig_server.json" > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp "/root/sbox/sbconfig_server.json"
+
+    sed -i "s/WARP_ENABLE=FALSE/WARP_ENABLE=TRUE/" /root/sbox/config
+    sed -i "s/WARP_OPTION=.*/WARP_OPTION=0/" /root/sbox/config
+    reload_singbox
 }
 
+#关闭warp
+disable_warp(){
+    jq 'del(.route) | del(.outbounds[] | select(.tag == "warp-IPv4-out" or .tag == "warp-IPv6-out" or .tag == "warp-IPv4-prefer-out" or .tag == "warp-IPv6-prefer-out" or .tag == "wireguard-out"))' "/root/sbox/sbconfig_server.json" > /root/sbox/sbconfig_server.temp && mv /root/sbox/sbconfig_server.temp "/root/sbox/sbconfig_server.json"
+    sed -i "s/WARP_ENABLE=TRUE/WARP_ENABLE=FALSE/" /root/sbox/config
+    reload_singbox
+}
+#更新singbox
+update_singbox(){
+    info "更新singbox..."
+    install_singbox
+    # 检查配置
+    if /root/sbox/sing-box check -c /root/sbox/sbconfig_server.json; then
+      echo "检查配置文件成功，重启服务..."
+      systemctl restart sing-box
+    else
+      error "启动失败，请检查配置文件"
+    fi
+}
+
+process_singbox() {
+    echo ""
+    echo ""
+    info "请选择选项："
+    echo ""
+    info "1. 重启sing-box"
+    info "2. 更新sing-box内核"
+    info "3. 查看sing-box状态"
+    info "4. 查看sing-box实时日志"
+    info "5. 查看sing-box服务端配置"
+    echo ""
+    read -p "请输入对应数字（1-5）: " user_input
+    echo ""
+    case "$user_input" in
+        1)
+            warning "重启sing-box..."
+            # 检查配置
+            if /root/sbox/sing-box check -c /root/sbox/sbconfig_server.json; then
+                info "检查配置文件，启动服务..."
+                systemctl restart sing-box
+            fi
+            info "重启完成"
+            ;;
+        2)
+            update_singbox
+            ;;
+        3)
+            warning "singbox基本信息如下(ctrl+c退出)"
+            systemctl status sing-box
+            ;;
+        4)
+            warning "singbox日志如下(ctrl+c退出)："
+            journalctl -u sing-box -o cat -f
+            ;;
+        5)
+            echo "singbox服务端如下："
+            cat /root/sbox/sbconfig_server.json
+            ;;
+        *)
+            echo "请输入正确选项: $1"
+            ;;
+    esac
+}
+
+
+# 作者介绍
+print_with_delay "Reality brutal 脚本 by 绵阿羊" 0.03
+echo ""
+echo ""
+#install pkgs
+install_pkgs
 # Check if reality.json, sing-box, and sing-box.service already exist
 if [ -f "/root/sbox/sbconfig_server.json" ] && [ -f "/root/sbox/config" ] && [ -f "/root/sbox/mianyang.sh" ] && [ -f "/usr/bin/mianyang" ] && [ -f "/root/sbox/sing-box" ] && [ -f "/etc/systemd/system/sing-box.service" ]; then
-
-    echo "sing-box-reality已经安装"
     echo ""
-    echo "请选择选项:"
+    warning "sing-box-brutal-reality已安装"
+    show_status
+    warning "请选择选项:"
     echo ""
-    echo "1. 重新安装"
-    echo "2. 修改配置"
-    echo "3. 显示客户端配置"
-    echo "4. 卸载"
-    echo "5. 更新sing-box内核"
-    echo "6. 一键开启bbr"
-    echo "7. 重启sing-box"
+    info "1. 重新安装"
+    info "2. 修改配置"
+    info "3. 显示客户端配置"
+    info "4. sing-box基础操作"
+    info "5. 一键开启bbr"
+    info "6. warp解锁操作"
+    info "0. 卸载"
+    hint "========================="
     echo ""
-    read -p "Enter your choice (1-7): " choice
+    read -p "请输入对应数字 (0-7): " choice
 
     case $choice in
       1)
-          show_notice "开始卸载..."
-          # Uninstall previous installation
           uninstall_singbox
         ;;
       2)
           #修改sb
           modify_singbox
-          # show client configuration
           show_client_configuration
           exit 0
         ;;
       3)  
-          # show client configuration
           show_client_configuration
           exit 0
       ;;	
-      4)
-          uninstall_singbox
+      4)  
+          process_singbox
           exit 0
           ;;
       5)
-          show_notice "更新 Sing-box..."
-          download_singbox
-          # Check configuration and start the service
-          if /root/sbox/sing-box check -c /root/sbox/sbconfig_server.json; then
-              echo "Configuration checked successfully. Starting sing-box service..."
-              systemctl restart sing-box
-          fi
-          echo ""  
+          enable_bbr
+          mianyang
           exit 0
           ;;
       6)
-          enable_bbr
+          process_warp
           exit 0
           ;;
-      7)
-          systemctl restart sing-box
-          echo "重启完成"
-	  exit 0
+          
+      0)
+          uninstall_singbox
+	        exit 0
           ;;
       *)
           echo "Invalid choice. Exiting."
@@ -857,77 +1403,68 @@ if [ -f "/root/sbox/sbconfig_server.json" ] && [ -f "/root/sbox/config" ] && [ -
 	esac
 	fi
 
-  
-install_brutal
-
 mkdir -p "/root/sbox/"
 
-download_singbox
-
-# reality
-red "开始配置Reality"
+install_singbox
+install_brutal
 echo ""
-# Generate key pair
-echo "自动生成基本参数"
+echo ""
+# reality
+warning "开始配置Reality..."
 echo ""
 key_pair=$(/root/sbox/sing-box generate reality-keypair)
-echo "Key pair生成完成"
-echo ""
-
-# Extract private key and public key
 private_key=$(echo "$key_pair" | awk '/PrivateKey/ {print $2}' | tr -d '"')
 public_key=$(echo "$key_pair" | awk '/PublicKey/ {print $2}' | tr -d '"')
-
-# Generate necessary values
+info "生成的公钥为:  $public_key"
+info "生成的私钥为:  $private_key"
 reality_uuid=$(/root/sbox/sing-box generate uuid)
 short_id=$(/root/sbox/sing-box generate rand --hex 8)
-echo "uuid和短id 生成完成"
+info "生成的uuid为:  $reality_uuid"
+info "生成的短id为:  $short_id"
 echo ""
-# Ask for listen port
-while true; do
-    read -p "请输入Reality端口号 (default: 443): " reality_port
-    reality_port=${reality_port:-443}
+echo "请输入brutal reality端口号"
+reality_brutal_port=$(generate_port)
+info "生成的brutal reality端口号为: $reality_brutal_port"
+reality_server_name="itunes.apple.com"
+while :; do
+    read -p "请输入需要偷取证书的网站，必须支持 TLS 1.3 and HTTP/2 (默认: $reality_server_name): " input_server_name
+    reality_server_name=${input_server_name:-$reality_server_name}
 
-    # 检测端口是否被占用
-    if ss -tuln | grep -q ":$reality_port\b"; then
-        echo "端口 $reality_port 已经被占用，请重新输入。"
-    else
+    if curl --tlsv1.3 --http2 -sI "https://$reality_server_name" | grep -q "HTTP/2"; then
         break
+    else
+        echo "域名 $reality_server_name 不支持 TLS 1.3 或 HTTP/2，请重新输入."
     fi
 done
-echo ""
-# Ask for server name (sni)
-read -p "请输入想要偷取的域名,需要支持tls1.3 (default: itunes.apple.com): " reality_server_name
-reality_server_name=${reality_server_name:-itunes.apple.com}
-echo ""
-read -p "请输入上行up带宽，对应客户端的下行带宽 (default: 100): " brutal_up
+info "域名 $reality_server_name 符合."
+read -p "请输入brutal 上行up带宽，对应客户端的下行带宽 (default: 100): " brutal_up
 brutal_up=${brutal_up:-100}
 read -p "请输入下行down带宽 (default: 1000): " brutal_down
 brutal_down=${brutal_down:-1000}
-
-#ip地址
+echo ""
+echo ""
+#get ip
 server_ip=$(curl -s4m8 ip.sb -k) || server_ip=$(curl -s6m8 ip.sb -k)
 
-#config配置文件
+#generate config
 cat > /root/sbox/config <<EOF
-
 # VPS ip
 SERVER_IP='$server_ip'
-# Singbox
 # Reality
-PRIVATE_KEY='$private_key'
 PUBLIC_KEY='$public_key'
-SHORT_ID='$short_id'
-REALITY_UUID='$reality_uuid'
-REALITY_PORT='$reality_port'
-REALITY_SERVER_NAME='$reality_server_name'
+
+# Warp
+WARP_ENABLE=FALSE
+# 1 2 3 4
+WARP_MODE=1
+# 0 局部分流 1 全局分流
+WARP_OPTION=0
 # Brutal
 BRUTAL_UP='$brutal_up'
 BRUTAL_DOWN='$brutal_down'
 EOF
 
-
-# sbox配置文件
+#generate singbox server config
 cat > /root/sbox/sbconfig_server.json << EOF
 {
   "log": {
@@ -937,10 +1474,12 @@ cat > /root/sbox/sbconfig_server.json << EOF
   },
   "inbounds": [
     {
+      "sniff": true,
+      "sniff_override_destination": true,
       "type": "vless",
-      "tag": "vless-in",
+      "tag": "vless-brutal-in",
       "listen": "::",
-      "listen_port": $reality_port,
+      "listen_port": $reality_brutal_port,
       "users": [
         {
           "uuid": "$reality_uuid",
@@ -968,25 +1507,21 @@ cat > /root/sbox/sbconfig_server.json << EOF
                 "up_mbps": $brutal_up,
                 "down_mbps": $brutal_down
             }
-        }}
-  ],
-  "outbounds": [
-    {
-      "type": "direct",
-      "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
+        }
     }
-  ]
+  ],
+    "outbounds": [
+        {
+            "type": "direct",
+            "tag": "direct"
+        },
+        {
+            "type": "block",
+            "tag": "block"
+        }
+    ]
 }
 EOF
-
-
-
-
-
 # Create sing-box.service
 cat > /etc/systemd/system/sing-box.service <<EOF
 [Unit]
@@ -994,7 +1529,7 @@ After=network.target nss-lookup.target
 
 [Service]
 User=root
-WorkingDirectory=/root
+WorkingDirectory=/root/sbox
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 ExecStart=/root/sbox/sing-box run -c /root/sbox/sbconfig_server.json
@@ -1010,15 +1545,14 @@ EOF
 
 # Check configuration and start the service
 if /root/sbox/sing-box check -c /root/sbox/sbconfig_server.json; then
-    echo "Configuration checked successfully. Starting sing-box service..."
+    hint "check config profile..."
     systemctl daemon-reload
     systemctl enable sing-box > /dev/null 2>&1
     systemctl start sing-box
     systemctl restart sing-box
-    create_shortcut
+    install_shortcut
     show_client_configuration
-
-
+    hint "输入mianyang,打开菜单"
 else
-    echo "Error in configuration. Aborting"
+    error "check sing-box server config profile error!"
 fi
