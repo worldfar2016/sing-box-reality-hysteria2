@@ -17,37 +17,32 @@ info() { echo -e "\033[32m\033[01m$*\033[0m"; }   # 绿色
 hint() { echo -e "\033[33m\033[01m$*\033[0m"; }   # 黄色
 #show system and singbox info
 show_status(){
-    # 获取sing-box服务的PID
     singbox_pid=$(pgrep sing-box)
-
-    # 获取Sing-box服务状态
     singbox_status=$(systemctl is-active sing-box)
-
     if [ "$singbox_status" == "active" ]; then
-        # 获取CPU和内存占用信息
         cpu_usage=$(ps -p $singbox_pid -o %cpu | tail -n 1)
-        memory_usage=$(ps -p $singbox_pid -o rss | tail -n 1)
-        memory_usage_mb=$((memory_usage / 1024))  # 转换为MB
-        latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | grep -Po '"tag_name": "\K.*?(?=")' | sort -V | tail -n 1)
+        memory_usage_mb=$(( $(ps -p "$singbox_pid" -o rss | tail -n 1) / 1024 ))
+
+        p_latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '[.[] | select(.prerelease==true)][0].tag_name')
+        latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '[.[] | select(.prerelease==false)][0].tag_name')
+
         latest_version=${latest_version_tag#v}  # Remove 'v' prefix from version number
-        echo ""
+        p_latest_version=${p_latest_version_tag#v}  # Remove 'v' prefix from version number
+
         iswarp=$(grep '^WARP_ENABLE=' /root/sbox/config | cut -d'=' -f2)
-        # 显示UI信息
-        warning "Sing-box服务状态信息:"
+
+        warning "SING-BOX服务状态信息:"
         hint "========================="
         info "状态: 运行中"
         info "CPU 占用: $cpu_usage%"
         info "内存 占用: ${memory_usage_mb}MB"
-        info "singbox最新版本: $latest_version"
-        info "singbox当前版本: $(/root/sbox/sing-box version 2>/dev/null | awk '/version/{print $NF}')"
-        info "warp分流开启(输入6管理): $iswarp"
+        info "singbox测试版最新版本: $p_latest_version"
+        info "singbox正式版最新版本: $latest_version"
+        info "singbox当前版本(输入4管理切换): $(/root/sbox/sing-box version 2>/dev/null | awk '/version/{print $NF}')"
+        info "warp流媒体解锁(输入6管理): $(if [ "$iswarp" == "TRUE" ]; then echo "开启"; else echo "关闭"; fi)"
         hint "========================="
-        # 可以添加其他资源信息获取，例如磁盘占用等
-
-        # 显示UI完成后的其他处理
-        # 例如：可以在这里添加展示其他资源信息的逻辑
     else
-        warning "Sing-box 未运行"
+        warning "SING-BOX 未运行！"
     fi
 
 }
@@ -109,42 +104,96 @@ reload_singbox(){
     fi
 }
 # install beta singbox
-#TODO install other singbox
 install_singbox(){
-  arch=$(uname -m)
-  echo "Architecture: $arch"
-  # Map architecture names
-  case ${arch} in
-      x86_64)
-          arch="amd64"
-          ;;
-      aarch64)
-          arch="arm64"
-          ;;
-      armv7l)
-          arch="armv7"
-          ;;
-  esac
+		echo "请选择需要安装的SING-BOX版本:"
+		echo "1. 正式版"
+		echo "2. 测试版"
+		read -p "输入你的选项 (1-2, 默认: 1): " version_choice
+		version_choice=${version_choice:-1}
+		# Set the tag based on user choice
+		if [ "$version_choice" -eq 2 ]; then
+			echo "Installing Alpha version..."
+			latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '[.[] | select(.prerelease==true)][0].tag_name')
+		else
+			echo "Installing Stable version..."
+			latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '[.[] | select(.prerelease==false)][0].tag_name')
+		fi
+		# No need to fetch the latest version tag again, it's already set based on user choice
+		latest_version=${latest_version_tag#v}  # Remove 'v' prefix from version number
+		echo "Latest version: $latest_version"
+		# Detect server architecture
+		arch=$(uname -m)
+		echo "本机架构为: $arch"
+    case ${arch} in
+      x86_64) arch="amd64" ;;
+      aarch64) arch="arm64" ;;
+      armv7l) arch="armv7" ;;
+    esac
+    # latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | grep -Po '"tag_name": "\K.*?(?=")' | sort -V | tail -n 1)
+    # latest_version=${latest_version_tag#v}
+    echo "最新版本为: $latest_version"
+    package_name="sing-box-${latest_version}-linux-${arch}"
+    url="https://github.com/SagerNet/sing-box/releases/download/${latest_version_tag}/${package_name}.tar.gz"
+    curl -sLo "/root/${package_name}.tar.gz" "$url"
+    tar -xzf "/root/${package_name}.tar.gz" -C /root
+    mv "/root/${package_name}/sing-box" /root/sbox
+    rm -r "/root/${package_name}.tar.gz" "/root/${package_name}"
+    chown root:root /root/sbox/sing-box
+    chmod +x /root/sbox/sing-box
+}
 
-  #beta版本
-  latest_version_tag=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | grep -Po '"tag_name": "\K.*?(?=")' | sort -V | tail -n 1)
-  latest_version=${latest_version_tag#v}  # Remove 'v' prefix from version number
-  echo "Latest version: $latest_version"
-  # Detect server architecture
-  # Prepare package names
-  package_name="sing-box-${latest_version}-linux-${arch}"
-  # Prepare download URL
-  url="https://github.com/SagerNet/sing-box/releases/download/${latest_version_tag}/${package_name}.tar.gz"
-  # Download the latest release package (.tar.gz) from GitHub
-  curl -sLo "/root/${package_name}.tar.gz" "$url"
-  # Extract the package and move the binary to /root
-  tar -xzf "/root/${package_name}.tar.gz" -C /root
-  mv "/root/${package_name}/sing-box" /root/sbox
-  # Cleanup the package
-  rm -r "/root/${package_name}.tar.gz" "/root/${package_name}"
-  # Set the permissions
-  chown root:root /root/sbox/sing-box
-  chmod +x /root/sbox/sing-box
+change_singbox(){
+			echo "切换SING-BOX版本..."
+			echo ""
+			# Extract the current version
+			current_version_tag=$(/root/sbox/sing-box version | grep 'sing-box version' | awk '{print $3}')
+
+			# Fetch the latest stable and alpha version tags
+			latest_stable_version=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '[.[] | select(.prerelease==false)][0].tag_name')
+			latest_alpha_version=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '[.[] | select(.prerelease==true)][0].tag_name')
+
+			# Determine current version type (stable or alpha)
+      if [[ $current_version_tag == *"-alpha"* || $current_version_tag == *"-rc"* || $current_version_tag == *"-beta"* ]]; then
+				echo "当前为测试版，准备切换为最新正式版..."
+				echo ""
+				new_version_tag=$latest_stable_version
+			else
+				echo "当前为正式版，准备切换为最新测试版..."
+				echo ""
+				new_version_tag=$latest_alpha_version
+			fi
+
+			# Stop the service before updating
+			systemctl stop sing-box
+
+			# Download and replace the binary
+			arch=$(uname -m)
+			case $arch in
+				x86_64) arch="amd64" ;;
+				aarch64) arch="arm64" ;;
+				armv7l) arch="armv7" ;;
+			esac
+
+			package_name="sing-box-${new_version_tag#v}-linux-${arch}"
+			url="https://github.com/SagerNet/sing-box/releases/download/${new_version_tag}/${package_name}.tar.gz"
+
+			curl -sLo "/root/${package_name}.tar.gz" "$url"
+			tar -xzf "/root/${package_name}.tar.gz" -C /root
+			mv "/root/${package_name}/sing-box" /root/sbox/sing-box
+
+			# Cleanup the package
+			rm -r "/root/${package_name}.tar.gz" "/root/${package_name}"
+
+			# Set the permissions
+			chown root:root /root/sbox/sing-box
+			chmod +x /root/sbox/sing-box
+
+			# Restart the service with the new binary
+			systemctl daemon-reload
+			systemctl start sing-box
+
+			echo "Version switched and service restarted with the new binary."
+			echo ""
 }
 
 generate_port() {
@@ -185,252 +234,6 @@ show_client_configuration() {
   short_id=$(jq -r '.inbounds[] | select(.tag == "vless-brutal-in") | .tls.reality.short_id[0]' /root/sbox/sbconfig_server.json)
 
   brutal_up=$(grep -o "BRUTAL_UP='[^']*'" /root/sbox/config | awk -F"'" '{print $2}')
-
-show_notice "sing-box1.7.0 客户端配置参数"
-cat << EOF
-{
-  "log": {
-    "level": "debug",
-    "timestamp": true
-  },
-  "dns": {
-    "servers": [
-      {
-        "tag": "proxyDns",
-        "address": "8.8.8.8",
-        "detour": "proxy"
-      },
-      {
-        "tag": "localDns",
-        "address": "https://223.5.5.5/dns-query",
-        "detour": "direct"
-      },
-      {
-        "tag": "block",
-        "address": "rcode://success"
-      },
-      {
-        "tag": "remote",
-        "address": "fakeip"
-      }
-    ],
-    "rules": [
-      {
-        "domain": [
-          "ghproxy.com",
-          "cdn.jsdelivr.net",
-          "testingcf.jsdelivr.net"
-        ],
-        "server": "localDns"
-      },
-      {
-        "geosite": "category-ads-all",
-        "server": "block"
-      },
-      {
-        "outbound": "any",
-        "server": "localDns",
-        "disable_cache": true
-      },
-      {
-        "geosite": "cn",
-        "server": "localDns"
-      },
-      {
-        "clash_mode": "direct",
-        "server": "localDns"
-      },
-      {
-        "clash_mode": "global",
-        "server": "proxyDns"
-      },
-      {
-        "geosite": "geolocation-!cn",
-        "server": "proxyDns"
-      },
-      {
-        "query_type": [
-          "A",
-          "AAAA"
-        ],
-        "server": "remote"
-      }
-    ],
-    "fakeip": {
-      "enabled": true,
-      "inet4_range": "198.18.0.0/15",
-      "inet6_range": "fc00::/18"
-    },
-    "independent_cache": true,
-    "strategy": "ipv4_only"
-  },
-  "inbounds": [
-    {
-      "type": "tun",
-      "inet4_address": "172.19.0.1/30",
-      "mtu": 9000,
-      "auto_route": true,
-      "strict_route": true,
-      "sniff": true,
-      "endpoint_independent_nat": false,
-      "stack": "system",
-      "platform": {
-        "http_proxy": {
-          "enabled": true,
-          "server": "127.0.0.1",
-          "server_port": 2080
-        }
-      }
-    },
-    {
-      "type": "mixed",
-      "listen": "127.0.0.1",
-      "listen_port": 2080,
-      "sniff": true,
-      "users": []
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "proxy",
-      "type": "selector",
-      "outbounds": [
-        "auto",
-        "direct",
-        "sing-box-reality-brutal"
-      ]
-    },
-    {
-      "type": "vless",
-      "tag": "sing-box-reality-brutal",
-      "uuid": "$reality_uuid",
-      "packet_encoding": "xudp",
-      "server": "$server_ip",
-      "server_port": $reality_port,
-      "flow": "",
-      "tls": {
-        "enabled": true,
-        "server_name": "$reality_server_name",
-        "utls": {
-          "enabled": true,
-          "fingerprint": "chrome"
-        },
-        "reality": {
-          "enabled": true,
-          "public_key": "$public_key",
-          "short_id": "$short_id"
-        }
-      },
-    "multiplex": {
-        "enabled": true,
-        "protocol": "h2mux",
-        "max_connections": 1,
-        "min_streams": 4,
-        "padding": true,
-        "brutal": {
-            "enabled": true,
-            "up_mbps": 50, //上行速度，windows，macos不会生效所以可随便写
-            "down_mbps": $brutal_up //下行速度，对应服务器的下行速度，当然可自行修改
-        }
-    }
-    },
-    {
-      "tag": "direct",
-      "type": "direct"
-    },
-    {
-      "tag": "block",
-      "type": "block"
-    },
-    {
-      "tag": "dns-out",
-      "type": "dns"
-    },
-    {
-      "tag": "auto",
-      "type": "urltest",
-      "outbounds": [
-        "sing-box-reality-brutal"
-      ],
-      "url": "http://www.gstatic.com/generate_204",
-      "interval": "1m",
-      "tolerance": 50
-    }
-  ],
-  "route": {
-    "auto_detect_interface": true,
-    "final": "proxy",
-    "geoip": {
-      "download_url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.db",
-      "download_detour": "direct"
-    },
-    "geosite": {
-      "download_url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.db",
-      "download_detour": "direct"
-    },
-    "rules": [
-      {
-        "protocol": "dns",
-        "outbound": "dns-out"
-      },
-      {
-        "network": "udp",
-        "port": 443,
-        "outbound": "block"
-      },
-      {
-        "geosite": "category-ads-all",
-        "outbound": "block"
-      },
-      {
-        "clash_mode": "direct",
-        "outbound": "direct"
-      },
-      {
-        "clash_mode": "global",
-        "outbound": "proxy"
-      },
-      {
-        "domain": [
-          "clash.razord.top",
-          "yacd.metacubex.one",
-          "yacd.haishan.me",
-          "d.metacubex.one"
-        ],
-        "outbound": "direct"
-      },
-      {
-        "geosite": "geolocation-!cn",
-        "outbound": "proxy"
-      },
-      {
-        "geoip": [
-          "private",
-          "cn"
-        ],
-        "outbound": "direct"
-      },
-      {
-        "geosite": "cn",
-        "outbound": "direct"
-      }
-    ]
-  },
-  "experimental": {
-    "clash_api": {
-      "external_controller": "127.0.0.1:9090",
-      "external_ui_download_url": "",
-      "external_ui_download_detour": "",
-      "external_ui": "ui",
-      "secret": "",
-      "default_mode": "rule",
-      "store_selected": true,
-      "cache_file": "",
-      "cache_id": ""
-    }
-  }
-}
-EOF
 
 show_notice "sing-box1.8.0及以上客户端配置参数"
 cat << EOF
@@ -615,6 +418,30 @@ cat << EOF
       "url": "http://www.gstatic.com/generate_204",
       "interval": "1m",
       "tolerance": 50
+    },
+    {
+      "tag": "WeChat",
+      "type": "selector",
+      "outbounds": [
+        "direct",
+        "sing-box-reality-brutal"
+      ]
+    },
+    {
+      "tag": "Apple",
+      "type": "selector",
+      "outbounds": [
+        "direct",
+        "sing-box-reality-brutal"
+      ]
+    },
+    {
+      "tag": "Microsoft",
+      "type": "selector",
+      "outbounds": [
+        "direct",
+        "sing-box-reality-brutal"
+      ]
     }
   ],
   "route": {
@@ -652,6 +479,10 @@ cat << EOF
         "outbound": "direct"
       },
       {
+        "rule_set": "geosite-wechat",
+        "outbound": "WeChat"
+      },
+      {
         "rule_set": "geosite-geolocation-!cn",
         "outbound": "proxy"
       },
@@ -666,6 +497,14 @@ cat << EOF
       {
         "rule_set": "geosite-cn",
         "outbound": "direct"
+      },
+      {
+        "rule_set": "geosite-apple",
+        "outbound": "Apple"
+      },
+      {
+        "rule_set": "geosite-microsoft",
+        "outbound": "Microsoft"
       }
     ],
     "rule_set": [
@@ -695,6 +534,27 @@ cat << EOF
         "type": "remote",
         "format": "binary",
         "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-ads-all.srs",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geosite-wechat",
+        "type": "remote",
+        "format": "source",
+        "url": "https://testingcf.jsdelivr.net/gh/Toperlock/sing-box-geosite@main/wechat.json",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geosite-apple",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/apple.srs",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geosite-microsoft",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/microsoft.srs",
         "download_detour": "direct"
       }
     ]
@@ -1147,11 +1007,43 @@ process_warp(){
     done
 }
 enable_warp(){
-    warning "开始注册warp..."
-    output=$(bash -c "$(curl -L warp-reg.vercel.app)")
-    v6=$(echo "$output" | grep -oP '"v6": "\K[^"]+' | awk 'NR==2')
-    private_key=$(echo "$output" | grep -oP '"private_key": "\K[^"]+')
-    reserved=$(echo "$output" | grep -oP '"reserved_str": "\K[^"]+')
+while :; do
+     warning "请选择是否需要注册warp"
+     echo ""
+     info "请选择选项："
+     echo ""
+     info "1. 使用绵羊提供的warp节点(默认)"
+     info "2. 使用手动刷的warp节点"
+     info "0. 退出"
+     echo ""
+     read -p "请输入对应数字（0-2）: " user_input
+     user_input=${user_input:-1}
+     case $user_input in
+         1)
+             v6="2606:4700:110:87ad:b400:91:eadb:887f"
+             private_key="wIC19yRRSJkhVJcE09Qo9bE3P3PIwS3yyqyUnjwNO34="
+             reserved="XiBe"
+             break
+             ;;
+         2)
+             warning "开始注册warp..."
+             output=$(bash -c "$(curl -L warp-reg.vercel.app)")
+             v6=$(echo "$output" | grep -oP '"v6": "\K[^"]+' | awk 'NR==2')
+             private_key=$(echo "$output" | grep -oP '"private_key": "\K[^"]+')
+             reserved=$(echo "$output" | grep -oP '"reserved_str": "\K[^"]+')
+             break
+             ;;
+         0)
+             # Exit the loop if option 0 is selected
+             echo "退出"
+             exit 0
+             ;;
+         *)
+             # Handle invalid input
+             echo "无效的输入，请重新输入"
+             ;;
+     esac
+ done
 while :; do
     warning "请选择需要设置的warp策略（默认v6优先）"
     echo ""
@@ -1296,6 +1188,7 @@ update_singbox(){
 }
 
 process_singbox() {
+  while :; do
     echo ""
     echo ""
     info "请选择选项："
@@ -1305,8 +1198,10 @@ process_singbox() {
     info "3. 查看sing-box状态"
     info "4. 查看sing-box实时日志"
     info "5. 查看sing-box服务端配置"
+    info "6. 切换SINGBOX内核版本"
+    info "0. 退出"
     echo ""
-    read -p "请输入对应数字（1-5）: " user_input
+    read -p "请输入对应数字（0-）: " user_input
     echo ""
     case "$user_input" in
         1)
@@ -1317,26 +1212,40 @@ process_singbox() {
                 systemctl restart sing-box
             fi
             info "重启完成"
+            break
             ;;
         2)
             update_singbox
+            break
             ;;
         3)
             warning "singbox基本信息如下(ctrl+c退出)"
             systemctl status sing-box
+            break
             ;;
         4)
             warning "singbox日志如下(ctrl+c退出)："
             journalctl -u sing-box -o cat -f
+            break
             ;;
         5)
             echo "singbox服务端如下："
             cat /root/sbox/sbconfig_server.json
+            break
             ;;
+        6)
+            change_singbox
+            break
+            ;;
+        0)
+          echo "退出"
+          break
+          ;;
         *)
-            echo "请输入正确选项: $1"
+            echo "请输入正确选项: 0-6"
             ;;
     esac
+  done
 }
 
 
